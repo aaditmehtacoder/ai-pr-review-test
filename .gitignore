@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated at runtime by the workflow's optional "Run checks" step
+ci_results.txt
+
+# Local secrets — never commit these
+.env
+*.env

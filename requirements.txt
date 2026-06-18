@@ -1,0 +1,6 @@
+# Runtime dependency for the AI PR reviewer. Just one:
+# - requests: GitHub REST calls (fetch PR + diff, list/post/patch comments) AND
+#   the GitHub Models inference call (OpenAI-compatible chat completions).
+# No provider SDK needed -- GitHub Models speaks plain HTTP and the GitHub token
+# authenticates both the REST and inference calls.
+requests>=2.31.0

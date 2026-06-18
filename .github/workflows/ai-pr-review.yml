@@ -1,0 +1,73 @@
+name: AI PR Review
+
+# Runs on every PR (no branch filter, so it works whether the target is main or
+# dev), plus a manual trigger so you can review an existing open PR on demand.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review (use this to review an existing open PR manually)"
+        required: true
+
+# Least privilege:
+#   contents: read          -> checkout
+#   pull-requests / issues  -> post and edit the review comment
+#   models: read            -> call GitHub Models with the built-in GITHUB_TOKEN
+#                              (this is what lets us avoid any extra API-key secret)
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  models: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Optional: capture lint/test output for the model to factor into the review.
+      # Anything written to ci_results.txt is folded into the review prompt.
+      # continue-on-error keeps a failing check from failing the whole job, and an
+      # empty file simply means "no CI context" (the script omits the section).
+      - name: Run checks (optional)
+        continue-on-error: true
+        run: |
+          : > ci_results.txt
+          # --- Uncomment and adapt to your project: ---
+          # python -m pytest -q >> ci_results.txt 2>&1 || true
+          # ruff check . >> ci_results.txt 2>&1 || true
+          # npm test >> ci_results.txt 2>&1 || true
+
+      - name: AI review
+        env:
+          # The built-in token does it all: REST (read code, write the comment)
+          # AND GitHub Models inference (thanks to `models: read` above).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # If your org disables `models: read` for the built-in token, create a
+          # PAT with the "Models" permission, store it as a secret, and uncomment:
+          # GITHUB_MODELS_TOKEN: ${{ secrets.MODELS_TOKEN }}
+          REPO: ${{ github.repository }}
+          # On pull_request events the PR number comes from the event; on a manual
+          # workflow_dispatch it comes from the input above.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # Target branch from the event, falling back to the repo default for manual runs.
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          MODEL: openai/gpt-4.1-mini
+          MAX_DIFF_CHARS: "12000"
+          DRY_RUN: "0"
+          # V1 is non-blocking. Set BLOCKING to "1" later if you want a
+          # do_not_merge recommendation to fail this check.
+          BLOCKING: "0"
+        run: python scripts/ai_pr_review.py
