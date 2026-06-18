@@ -311,6 +311,17 @@ def _format_location(file, line):
     return file or "(general)"
 
 
+def _blockquote_field(label, text):
+    """Render ``> **label:** text`` as blockquote lines, keeping any multi-line
+    text (e.g. a code snippet in a fix) inside the quoted card instead of letting
+    it break out below the blockquote."""
+    parts = (text or "").split("\n")
+    lines = [f"> **{label}:** {parts[0]}".rstrip()]
+    for p in parts[1:]:
+        lines.append(f"> {p}".rstrip() if p.strip() else ">")
+    return lines
+
+
 def _render_finding(index, finding):
     """Render one blocker/warning as a tidy card: location, severity, what's wrong, how to fix."""
     loc = _format_location(finding.get("file"), finding.get("line"))
@@ -322,11 +333,11 @@ def _render_finding(index, finding):
     reason = (finding.get("reason") or "").strip()
     fix = (finding.get("suggested_fix") or "").strip()
     if reason:
-        out.append(f"> **🔍 What's wrong:** {reason}")
+        out += _blockquote_field("🔍 What's wrong", reason)
     if fix:
         if reason:
             out.append(">")
-        out.append(f"> **🛠️ How to fix:** {fix}")
+        out += _blockquote_field("🛠️ How to fix", fix)
     out.append("")
     return out
 

@@ -207,6 +207,14 @@ def test_render_comment_shows_severity_and_category():
     assert "auth" in comment       # category on the finding
 
 
+def test_render_finding_keeps_multiline_fix_inside_the_card():
+    review = _blocking_review()
+    review["blockers"][0]["suggested_fix"] = "Use a parameterized query:\ndb.execute(sql, (uid,))"
+    comment = air.render_comment(review)
+    # the code line must stay quoted (prefixed with '>'), not break out of the card
+    assert "> db.execute(sql, (uid,))" in comment
+
+
 def test_render_comment_nitpicks_go_in_collapsed_details():
     review = _clean_review()
     review["nitpicks"] = [{"file": "utils.py", "note": "Prefer a constant here."}]
