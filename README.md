@@ -154,11 +154,14 @@ different request parameters and aren't drop-in here.) Browse the full catalog a
 
 ## Blocking mode
 
-V1 is **non-blocking**: a completed review always exits `0`, so the PR check is
-green even when the model flags problems. The review is advice, not a gate.
+This workflow ships with **`BLOCKING: "1"`**: when the review recommends
+`do_not_merge`, the script posts its comment **and then exits `1`**, so the check
+goes **red ✗** on risky PRs. Set `BLOCKING: "0"` to make it purely advisory — the
+check stays green and the verdict lives only in the comment.
 
-If you later want a hard stop, set `BLOCKING: "1"` in the workflow. Then — and
-only then — a `do_not_merge` recommendation makes the script exit `1`.
+A red check is a strong signal, but it does not *prevent* merging on its own. To
+actually block the merge button, add a branch-protection rule requiring the
+**AI PR Review** check under Settings → Branches → Require status checks to pass.
 
 Separately, genuine **operational failures** (bad/insufficient token, rate limit,
 the model refusing to call the tool, network errors) print a clear `ERROR:` line

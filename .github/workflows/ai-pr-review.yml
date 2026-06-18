@@ -67,7 +67,8 @@ jobs:
           MODEL: openai/gpt-4.1
           MAX_DIFF_CHARS: "12000"
           DRY_RUN: "0"
-          # V1 is non-blocking. Set BLOCKING to "1" later if you want a
-          # do_not_merge recommendation to fail this check.
-          BLOCKING: "0"
+          # BLOCKING=1: a "do_not_merge" verdict makes the script exit 1, so the
+          # check goes red on risky PRs. The review comment is still posted first.
+          # (The bot still never merges/closes anything; a human decides.)
+          BLOCKING: "1"
         run: python scripts/ai_pr_review.py
