@@ -147,49 +147,64 @@ def test_build_user_prompt_notes_truncation_only_when_truncated():
 # ---------------------------------------------------------------------------
 def _clean_review():
     return {
+        "headline": "Small, safe refactor — good to go.",
         "summary": "Small, self-contained refactor with no risky changes.",
         "risk_level": "low",
+        "merge_recommendation": "merge",
+        "positives": ["Clear naming", "Inputs are validated"],
         "blockers": [],
         "warnings": [],
         "nitpicks": [],
-        "merge_recommendation": "merge",
+        "test_suggestions": [],
     }
 
 
 def _blocking_review():
     return {
+        "headline": "Missing auth on a destructive endpoint — do not merge.",
         "summary": "Adds a delete endpoint but skips the permission check.",
         "risk_level": "high",
+        "merge_recommendation": "do_not_merge",
+        "positives": ["Endpoint is small and readable"],
         "blockers": [
             {
                 "file": "app/api/orders.py",
                 "line": "42",
+                "severity": "critical",
+                "category": "auth",
                 "reason": "No authorization check before deleting the order.",
                 "suggested_fix": "Add require_role('admin') before the delete call.",
             }
         ],
         "warnings": [],
         "nitpicks": [],
-        "merge_recommendation": "do_not_merge",
+        "test_suggestions": ["Add a test that a non-admin caller gets 403."],
     }
 
 
-def test_render_comment_clean_pr_has_no_empty_blockers_section():
+def test_render_comment_clean_pr_has_no_blockers_section():
     comment = air.render_comment(_clean_review())
-    assert air.COMMENT_MARKER in comment          # hidden upsert marker present
-    assert "Blockers" not in comment              # empty section is omitted entirely
-    assert "Warnings" not in comment              # empty section is omitted entirely
-    assert "Recommendation" in comment
-    assert "Merge" in comment                     # the ✅ Merge verdict
-    assert "non-blocking" in comment.lower()      # footer disclaimer
+    assert air.COMMENT_MARKER in comment              # hidden upsert marker present
+    assert "Ready to merge" in comment                # green banner verdict
+    assert "must fix before merging" not in comment   # blockers section omitted
+    assert "What's done well" in comment              # positives are rendered
+    assert "non-blocking" in comment.lower()          # footer disclaimer
 
 
 def test_render_comment_with_blocker_shows_location_fix_and_verdict():
     comment = air.render_comment(_blocking_review())
-    assert "### ⛔ Blockers" in comment                          # section header shown
-    assert "app/api/orders.py:42" in comment                    # file:line reference
+    assert "### ⛔ Blockers — must fix before merging" in comment           # section header
+    assert "app/api/orders.py:42" in comment                               # file:line reference
     assert "Add require_role('admin') before the delete call." in comment  # the fix text
-    assert "Do not merge yet" in comment                        # do_not_merge verdict
+    assert "How to fix" in comment                                         # actionable label
+    assert "Not ready to merge" in comment                                 # banner verdict
+    assert "Do not merge yet" in comment                                   # table label
+
+
+def test_render_comment_shows_severity_and_category():
+    comment = air.render_comment(_blocking_review())
+    assert "Critical" in comment   # severity badge on the finding
+    assert "auth" in comment       # category on the finding
 
 
 def test_render_comment_nitpicks_go_in_collapsed_details():

@@ -65,63 +65,74 @@ REVIEW_RULES_FILE = ".github/ai-review-rules.md"
 # single function call makes the model return schema-valid JSON; we read it off
 # choices[0].message.tool_calls[0].function.arguments (a JSON string).
 # ---------------------------------------------------------------------------
+# Shared shape for a blocker/warning: every finding says how serious it is, what
+# kind of issue it is, what's wrong (and the impact), and exactly how to fix it.
+_FINDING_PROPS = {
+    "file": {"type": "string", "description": "Path to the file as it appears in the diff."},
+    "line": {"type": "string", "description": "Line or hunk reference, e.g. '42' or '40-55'."},
+    "severity": {
+        "type": "string",
+        "enum": ["critical", "high", "medium", "low"],
+        "description": "How serious this specific issue is.",
+    },
+    "category": {
+        "type": "string",
+        "enum": ["security", "auth", "data-loss", "crash", "api-contract",
+                 "performance", "correctness", "quality", "tests", "other"],
+        "description": "The kind of issue, for triage.",
+    },
+    "reason": {"type": "string", "description": "What is wrong AND the concrete impact if it ships."},
+    "suggested_fix": {"type": "string", "description": "Specific, actionable fix; name the code and show a snippet when useful."},
+}
+_FINDING = {"type": "object", "properties": _FINDING_PROPS,
+            "required": ["file", "line", "severity", "category", "reason", "suggested_fix"]}
+
 _REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {
-            "type": "string",
-            "description": "2-3 sentence plain-language summary of the change and its risk.",
-        },
+        "headline": {"type": "string", "description": "One punchy sentence capturing the overall verdict."},
+        "summary": {"type": "string", "description": "2-4 sentence overview of what the change does and its risk."},
         "risk_level": {
             "type": "string",
             "enum": ["none", "low", "medium", "high", "critical"],
             "description": "Overall risk of merging this diff as-is.",
         },
+        "merge_recommendation": {
+            "type": "string",
+            "enum": ["merge", "merge_with_caution", "do_not_merge"],
+            "description": "Is this ready to merge? do_not_merge if there is any blocker.",
+        },
+        "positives": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Specific things the PR does well. Be fair and concrete.",
+        },
         "blockers": {
             "type": "array",
             "description": "Issues that should stop a merge. Empty if there are none.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file": {"type": "string"},
-                    "line": {"type": "string", "description": "Line or hunk reference, e.g. '42' or '40-55'."},
-                    "reason": {"type": "string"},
-                    "suggested_fix": {"type": "string"},
-                },
-                "required": ["file", "line", "reason", "suggested_fix"],
-            },
+            "items": _FINDING,
         },
         "warnings": {
             "type": "array",
             "description": "Real but non-blocking concerns. Empty if there are none.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file": {"type": "string"},
-                    "line": {"type": "string"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["file", "line", "reason"],
-            },
+            "items": _FINDING,
         },
         "nitpicks": {
             "type": "array",
             "description": "Minor, optional polish. Keep this rare and short.",
             "items": {
                 "type": "object",
-                "properties": {
-                    "file": {"type": "string"},
-                    "note": {"type": "string"},
-                },
+                "properties": {"file": {"type": "string"}, "note": {"type": "string"}},
                 "required": ["file", "note"],
             },
         },
-        "merge_recommendation": {
-            "type": "string",
-            "enum": ["merge", "merge_with_caution", "do_not_merge"],
+        "test_suggestions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Concrete tests worth adding for this change. Optional.",
         },
     },
-    "required": ["summary", "risk_level", "blockers", "warnings", "merge_recommendation"],
+    "required": ["headline", "summary", "risk_level", "merge_recommendation", "positives", "blockers", "warnings"],
 }
 
 SUBMIT_REVIEW_TOOL = {
@@ -136,33 +147,42 @@ SUBMIT_REVIEW_TOOL = {
     },
 }
 
-SYSTEM_PROMPT = """You are a meticulous senior software engineer reviewing a pull request.
+SYSTEM_PROMPT = """You are a meticulous, fair senior software engineer reviewing a pull request.
+Your job is to tell the author, clearly and kindly, whether this is safe to merge --
+and if not, exactly WHAT to fix and HOW.
 
 Review ONLY the unified diff you are given. Do not speculate about code you cannot \
-see, and do not invent problems -- if the change looks safe, say so and recommend \
-merging. A clean review is a good outcome, not a failure.
+see, and do not invent problems. A clean review is a good outcome, not a failure.
 
-Treat these as BLOCKERS (issues serious enough to stop a merge):
+Be fair. In `positives`, call out what the PR genuinely does well (good naming, input \
+validation, tests, clear structure). A review that only criticises is demoralising and \
+trusted less.
+
+Treat these as BLOCKERS (serious enough to stop a merge):
   - Security vulnerabilities (injection, SSRF, path traversal, unsafe deserialization, \
-secrets committed to the repo, etc.).
+secrets committed to the repo, disabled signature/certificate checks, etc.).
   - Authentication / authorization / permission mistakes (missing access checks, \
 privilege escalation, IDOR).
-  - Data loss or destructive operations (unguarded deletes, dropping tables or \
-columns, irreversible or unsafe migrations).
-  - Crashes and unhandled errors (null/None dereferences, unhandled exceptions, \
-index errors) on realistic inputs.
-  - Broken API contracts (changed/removed response fields, incompatible signatures, \
-status-code changes) that existing callers rely on.
+  - Data loss or destructive operations (unguarded deletes, dropping tables or columns, \
+irreversible migrations).
+  - Crashes and unhandled errors on realistic inputs.
+  - Broken API contracts that existing callers rely on.
 
-Use WARNINGS for genuine but non-blocking concerns (missing tests for risky logic, \
-fragile error handling, performance footguns). Use NITPICKS sparingly -- only when \
-truly useful. Never pad the review with style trivia.
+Use WARNINGS for genuine but non-blocking concerns; use NITPICKS sparingly.
 
-Be precise: cite the file and the changed line for every finding. Prefer a few \
-high-confidence findings over many speculative ones.
+For EVERY blocker and warning, fill in all fields:
+  - `severity` and `category`, so the author can triage at a glance;
+  - `reason` = what is wrong AND the concrete impact if it ships;
+  - `suggested_fix` = specific, actionable steps -- name the function/line, describe the \
+safer approach, and include a short code snippet when it helps.
 
-You MUST respond by calling the `submit_review` function exactly once with \
-schema-valid JSON. Do not write any prose outside the function call."""
+Set `merge_recommendation` honestly: `do_not_merge` if there is ANY blocker; \
+`merge_with_caution` if only warnings give you pause; `merge` if it is clean. Write a \
+crisp one-line `headline` and a `summary`, and add `test_suggestions` when useful.
+
+Prefer a few high-confidence findings over many speculative ones. You MUST respond by \
+calling the `submit_review` function exactly once with schema-valid JSON, and write no \
+prose outside the function call."""
 
 
 # ---------------------------------------------------------------------------
@@ -267,17 +287,18 @@ def extract_review(response_json):
 
 
 # Display maps for rendering.
-_RISK_EMOJI = {
-    "none": "🟢",
-    "low": "🟢",
-    "medium": "🟡",
-    "high": "🟠",
-    "critical": "🔴",
+_RISK_BADGE = {
+    "none": "🟢 None", "low": "🟢 Low", "medium": "🟡 Medium",
+    "high": "🟠 High", "critical": "🔴 Critical",
 }
-_MERGE_LABEL = {
-    "merge": "✅ Merge",
-    "merge_with_caution": "⚠️ Merge with caution",
-    "do_not_merge": "⛔ Do not merge yet",
+# merge_recommendation -> (emoji, banner verdict, table label, GitHub alert type)
+_REC = {
+    "merge": ("✅", "Ready to merge", "Merge", "TIP"),
+    "merge_with_caution": ("⚠️", "Merge with caution", "Merge with caution", "WARNING"),
+    "do_not_merge": ("⛔", "Not ready to merge", "Do not merge yet", "CAUTION"),
+}
+_SEV_BADGE = {
+    "critical": "🔴 Critical", "high": "🟠 High", "medium": "🟡 Medium", "low": "🔵 Low",
 }
 
 
@@ -290,66 +311,101 @@ def _format_location(file, line):
     return file or "(general)"
 
 
-def render_comment(review):
-    """Render the review dict into one markdown comment body.
+def _render_finding(index, finding):
+    """Render one blocker/warning as a tidy card: location, severity, what's wrong, how to fix."""
+    loc = _format_location(finding.get("file"), finding.get("line"))
+    sev = _SEV_BADGE.get((finding.get("severity") or "").strip(), (finding.get("severity") or "").strip())
+    cat = (finding.get("category") or "").strip()
+    meta = "  ·  ".join(x for x in [sev, f"`{cat}`" if cat else ""] if x)
+    header = f"**{index}. `{loc}`**"
+    out = [f"{header}  ·  {meta}" if meta else header, ""]
+    reason = (finding.get("reason") or "").strip()
+    fix = (finding.get("suggested_fix") or "").strip()
+    if reason:
+        out.append(f"> **🔍 What's wrong:** {reason}")
+    if fix:
+        if reason:
+            out.append(">")
+        out.append(f"> **🛠️ How to fix:** {fix}")
+    out.append("")
+    return out
 
-    The body always starts with the hidden ``COMMENT_MARKER`` so the upsert logic
-    can find and edit it later. Empty sections are omitted; nitpicks live in a
-    collapsed ``<details>``; a footer makes clear this is a non-blocking review.
+
+def render_comment(review):
+    """Render the review dict into one polished markdown comment body.
+
+    Starts with the hidden ``COMMENT_MARKER`` (so the upsert can find and edit it),
+    then a native GitHub alert banner with the merge verdict, an at-a-glance table,
+    what the PR does well, then Blockers / Warnings as fix-cards. Nitpicks and test
+    suggestions live in collapsed ``<details>``. Empty sections are omitted. Every
+    field is read defensively so a minimal review dict still renders cleanly.
     """
     risk = (review.get("risk_level") or "unknown").strip()
     rec = (review.get("merge_recommendation") or "unknown").strip()
+    headline = (review.get("headline") or "").strip()
     summary = (review.get("summary") or "").strip()
+    positives = review.get("positives") or []
     blockers = review.get("blockers") or []
     warnings = review.get("warnings") or []
     nitpicks = review.get("nitpicks") or []
+    tests = review.get("test_suggestions") or []
 
-    lines = [COMMENT_MARKER, "## 🤖 AI PR Review", ""]
-    lines.append(
-        f"**Risk:** {_RISK_EMOJI.get(risk, '⚪')} `{risk}`  |  "
-        f"**Recommendation:** {_MERGE_LABEL.get(rec, rec)}"
-    )
-    lines.append("")
+    emoji, verdict, rec_label, alert = _REC.get(rec, ("•", rec, rec, "NOTE"))
+
+    lines = [COMMENT_MARKER, "# 🤖 AI Code Review", ""]
+
+    # Verdict banner — a native GitHub alert (green tip / amber warning / red caution).
+    banner = f"**{emoji} {verdict}**"
+    if headline:
+        banner += f" — {headline}"
+    lines += [f"> [!{alert}]", f"> {banner}", ""]
+
+    # At-a-glance table.
+    lines += [
+        "| | |",
+        "|:--|:--|",
+        f"| **Risk level** | {_RISK_BADGE.get(risk, risk)} |",
+        f"| **Recommendation** | {emoji} {rec_label} |",
+        f"| **Blockers** | {len(blockers)} |",
+        f"| **Warnings** | {len(warnings)} |",
+        "",
+    ]
 
     if summary:
-        lines.append(summary)
+        lines += [summary, ""]
+
+    if positives:
+        lines += ["### ✅ What's done well", ""]
+        lines += [f"- {p}" for p in positives]
         lines.append("")
 
     if blockers:
-        lines.append(f"### ⛔ Blockers ({len(blockers)})")
-        lines.append("")
-        for b in blockers:
-            loc = _format_location(b.get("file"), b.get("line"))
-            lines.append(f"- **{loc}** — {(b.get('reason') or '').strip()}")
-            fix = (b.get("suggested_fix") or "").strip()
-            if fix:
-                lines.append(f"  - _Suggested fix:_ {fix}")
-        lines.append("")
+        lines += ["### ⛔ Blockers — must fix before merging", ""]
+        for i, b in enumerate(blockers, 1):
+            lines += _render_finding(i, b)
 
     if warnings:
-        lines.append(f"### ⚠️ Warnings ({len(warnings)})")
-        lines.append("")
-        for w in warnings:
-            loc = _format_location(w.get("file"), w.get("line"))
-            lines.append(f"- **{loc}** — {(w.get('reason') or '').strip()}")
-        lines.append("")
+        lines += ["### ⚠️ Warnings — worth addressing", ""]
+        for i, w in enumerate(warnings, 1):
+            lines += _render_finding(i, w)
 
     if nitpicks:
-        lines.append("<details>")
-        lines.append(f"<summary>💬 Nitpicks ({len(nitpicks)})</summary>")
-        lines.append("")
+        lines += ["<details>", f"<summary>💡 Nitpicks ({len(nitpicks)})</summary>", ""]
         for n in nitpicks:
             f = (n.get("file") or "").strip()
             note = (n.get("note") or "").strip()
             lines.append(f"- **{f}** — {note}" if f else f"- {note}")
-        lines.append("")
-        lines.append("</details>")
-        lines.append("")
+        lines += ["", "</details>", ""]
+
+    if tests:
+        lines += ["<details>", f"<summary>🧪 Suggested tests ({len(tests)})</summary>", ""]
+        lines += [f"- {t}" for t in tests]
+        lines += ["", "</details>", ""]
 
     lines.append("---")
     lines.append(
-        "🤖 Non-blocking AI review — informational only. This bot never merges, "
-        "closes, or approves anything; a human decides. Generated via GitHub Models."
+        "<sub>🤖 <b>Non-blocking AI review</b> — informational only. This bot never "
+        "merges, closes, or approves anything; a human decides. Generated via GitHub Models.</sub>"
     )
     return "\n".join(lines)
 
