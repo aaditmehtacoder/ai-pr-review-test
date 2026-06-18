@@ -32,7 +32,7 @@ Configuration (all via environment variables):
     REPO                 (required)  "owner/repo"
     PR_NUMBER            (required)  pull request number to review
     BASE_BRANCH          (optional)  target branch, default "main"
-    MODEL                (optional)  GitHub Models id, default "openai/gpt-4.1-mini"
+    MODEL                (optional)  GitHub Models id, default "openai/gpt-4.1"
     MODELS_ENDPOINT      (optional)  inference base URL, default GitHub Models
     MAX_DIFF_CHARS       (optional)  truncate the diff to this many chars, default 12000
     DRY_RUN              (optional)  "1" => print the comment + JSON instead of posting
@@ -49,7 +49,7 @@ import requests
 GITHUB_API = "https://api.github.com"
 MODELS_ENDPOINT = "https://models.github.ai/inference"
 COMMENT_MARKER = "<!-- ai-pr-review -->"
-DEFAULT_MODEL = "openai/gpt-4.1-mini"
+DEFAULT_MODEL = "openai/gpt-4.1"
 DEFAULT_BASE_BRANCH = "main"
 DEFAULT_MAX_DIFF_CHARS = 12000
 GITHUB_TIMEOUT = 30   # seconds, GitHub REST calls

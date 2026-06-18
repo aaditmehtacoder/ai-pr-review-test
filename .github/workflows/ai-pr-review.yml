@@ -64,7 +64,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           # Target branch from the event, falling back to the repo default for manual runs.
           BASE_BRANCH: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
-          MODEL: openai/gpt-4.1-mini
+          MODEL: openai/gpt-4.1
           MAX_DIFF_CHARS: "12000"
           DRY_RUN: "0"
           # V1 is non-blocking. Set BLOCKING to "1" later if you want a

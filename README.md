@@ -62,8 +62,9 @@ GitHub REST calls and the model inference.
    Within a minute the **AI PR Review** workflow runs and posts a comment. Push
    another commit — the comment updates in place rather than adding a second one.
 
-Default model: **`openai/gpt-4.1-mini`** (free, generous rate limits, supports
-the forced function call, large context for big diffs).
+Default model: **`openai/gpt-4.1`** (a strong general model, free on GitHub
+Models, ~50 reviews/day). Reviewing a lot of PRs? Set `MODEL` to
+`openai/gpt-4.1-mini` for ~150/day. See [Choosing a model](#choosing-a-model).
 
 > **Tip:** the first time, do a [dry run](#dry-run-read-the-output-before-anything-posts)
 > so you can read the model's output locally before anything is ever posted.
@@ -114,7 +115,7 @@ The workflow sets these for you; you set them by hand only for local/dry runs.
 | `REPO`                | yes      | —                            | `owner/repo`. The workflow passes `${{ github.repository }}`. |
 | `PR_NUMBER`           | yes      | —                            | PR number to review. |
 | `BASE_BRANCH`         | no       | `main`                       | Target branch, used as context in the prompt. |
-| `MODEL`               | no       | `openai/gpt-4.1-mini`        | Any GitHub Models id (see below). |
+| `MODEL`               | no       | `openai/gpt-4.1`             | Any GitHub Models id (see below). |
 | `MODELS_ENDPOINT`     | no       | `https://models.github.ai/inference` | Inference base URL (override for GHES/proxy). |
 | `MAX_DIFF_CHARS`      | no       | `12000`                      | Truncate the diff to this many chars; the prompt notes when it was cut. |
 | `DRY_RUN`             | no       | off                          | `1` → print the comment + JSON instead of posting. |
@@ -140,9 +141,9 @@ the forced function call this script relies on:
 
 | Model id                  | Tier | Notes |
 |---------------------------|------|-------|
-| `openai/gpt-4.1-mini`     | low  | **default** — strong, cheap-on-limits, big context |
+| `openai/gpt-4.1`          | high | **default** — strongest general reviewer; ~50 reviews/day free |
+| `openai/gpt-4.1-mini`     | low  | rate-limit-friendly (~150/day); great for high PR volume |
 | `openai/gpt-4o-mini`      | low  | smaller/older, also fine |
-| `openai/gpt-4.1`          | high | higher quality, tighter limits |
 | `openai/gpt-4o`           | high | higher quality, tighter limits |
 
 Set `MODEL` to switch. (Reasoning models like `openai/o1`/`o3`/`gpt-5` use
