@@ -188,7 +188,7 @@ def test_render_comment_clean_pr_has_no_blockers_section():
     assert "Ready to merge" in comment                # green banner verdict
     assert "must fix before merging" not in comment   # blockers section omitted
     assert "What's done well" in comment              # positives are rendered
-    assert "non-blocking" in comment.lower()          # footer disclaimer
+    assert "a human decides" in comment.lower()       # footer disclaimer
 
 
 def test_render_comment_with_blocker_shows_location_fix_and_verdict():

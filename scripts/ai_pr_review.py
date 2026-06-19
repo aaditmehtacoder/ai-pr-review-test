@@ -415,8 +415,9 @@ def render_comment(review):
 
     lines.append("---")
     lines.append(
-        "<sub>🤖 <b>Non-blocking AI review</b> — informational only. This bot never "
-        "merges, closes, or approves anything; a human decides. Generated via GitHub Models.</sub>"
+        "<sub>🤖 <b>Automated AI review</b> — informational. This bot only comments and sets "
+        "a status check; it never merges, closes, or approves anything. A human decides. "
+        "Generated via GitHub Models.</sub>"
     )
     return "\n".join(lines)
 

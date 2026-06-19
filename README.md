@@ -14,9 +14,9 @@ GitHub REST calls and the model inference.
 - ✅ Reads the PR diff, posts a single review comment (risk level, summary,
   blockers, warnings, nitpicks, merge recommendation).
 - ✅ Updates that one comment in place on every new push.
-- ✅ Non-blocking by default — it never fails your PR check (see
-  [Blocking mode](#blocking-mode)).
-- 🚫 **Never** merges, closes, approves, or pushes. It only comments.
+- ✅ Posts a clear verdict and a status check — red ✗ when it says *do not merge*,
+  green when it's mergeable (configurable; see [Blocking mode](#blocking-mode)).
+- 🚫 **Never** merges, closes, approves, or pushes. It only comments and sets the check.
 
 ---
 
@@ -201,10 +201,10 @@ These same files drop into a shared repo unchanged. A few things to know:
   `pull_request_target` workflow, which has real security trade-offs and is
   intentionally **not** set up here.
 - **Mind the rate limits.** GitHub Models free-tier limits are per-account/per-org
-  and shared across everything using them. A busy repo on a high-tier model can
-  hit daily caps; the default low-tier model has the most headroom.
-- **Keep it non-blocking at first.** Let the team see the comments for a while
-  before considering `BLOCKING` mode, so the bot earns trust instead of getting in
-  the way.
+  and shared across everything using them. The default `openai/gpt-4.1` is high-tier
+  (~50 reviews/day); for a busy repo, switch `MODEL` to `openai/gpt-4.1-mini` (~150/day).
+- **Decide on `BLOCKING` for the team.** This repo ships with `BLOCKING: "1"` (a
+  do-not-merge verdict fails the check). For a brand-new rollout you might start with
+  `BLOCKING: "0"` (advisory only) so the bot earns trust, then turn it on.
 - **Tune with `.github/ai-review-rules.md`** to encode team conventions so reviews
   match how your team actually works.
