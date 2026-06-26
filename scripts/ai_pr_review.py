@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import requests
@@ -170,6 +171,19 @@ irreversible migrations).
 
 Use WARNINGS for genuine but non-blocking concerns; use NITPICKS sparingly.
 
+Unit-test awareness. You are given a "Test coverage context" section listing which \
+production files and which test files this PR changes, plus a heuristic list of \
+functions/classes it touches. Use it like this:
+  - When changed functions or risky logic do not appear to have related tests, SUGGEST \
+concrete unit tests -- name the cases (happy path, edge cases, failure modes) in \
+`test_suggestions`. Be specific, not generic.
+  - Do NOT treat "no test files changed" as an automatic blocker. Plenty of safe changes \
+(docs, comments, config, simple refactors) need no new tests.
+  - DO treat missing tests as higher risk -- a warning, not a silent omission -- when the \
+PR touches authentication/authorization, database migrations, campaign/email logic, \
+Celery or other background jobs, public API contracts, or data-destructive operations. \
+For these, call out the gap and propose the specific tests that would de-risk the change.
+
 For EVERY blocker and warning, fill in all fields:
   - `severity` and `category`, so the author can triage at a glance;
   - `reason` = what is wrong AND the concrete impact if it ships;
@@ -197,6 +211,162 @@ def read_optional_file(path):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Test-awareness helpers. These parse the unified diff with deliberately simple
+# patterns so the model gets useful context about *whether tests changed* and
+# *what changed*. They are best-effort context, not a real parser -- false
+# positives/negatives are acceptable and never block anything.
+# ---------------------------------------------------------------------------
+# Directory names that mark a path as test code (matched as a path segment).
+_TEST_DIR_SEGMENTS = {"tests", "test", "__tests__"}
+# Filename patterns: test_*.py, *_test.py, *.test.{ts,tsx,js,jsx}, *.spec.{...}.
+_TEST_FILENAME_RE = re.compile(
+    r"(^test_.+\.py$)|(.+_test\.py$)|(.+\.(test|spec)\.(ts|tsx|js|jsx)$)"
+)
+
+# Lightweight "a symbol was added/modified" heuristics, applied to ADDED diff lines.
+_SYMBOL_PATTERNS = (
+    re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\("),                # Python: def name(
+    re.compile(r"^\s*class\s+([A-Za-z_]\w*)"),                                # Python/TS: class Name
+    re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("),  # JS/TS: function name(
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*="),  # JS/TS: const name =
+)
+
+
+def _strip_diff_path(raw):
+    """Normalise a path taken from a diff header (drop a/ b/ prefix and timestamp)."""
+    raw = (raw or "").strip().split("\t", 1)[0].strip()
+    if raw.startswith(("a/", "b/")):
+        raw = raw[2:]
+    return raw
+
+
+def parse_changed_files(diff):
+    """Extract the changed file paths from a unified (git) diff.
+
+    Reads ``diff --git a/<old> b/<new>`` headers (preferring the new path), with
+    ``+++``/``---`` lines as a fallback for plain unified diffs. Skips ``/dev/null``
+    (the deleted side of a delete/create). Returns a de-duplicated list in
+    first-seen order. Best-effort context, not a spec-complete parser.
+    """
+    files = []
+    seen = set()
+
+    def _add(path):
+        path = (path or "").strip()
+        if not path or path == "/dev/null" or path in seen:
+            return
+        seen.add(path)
+        files.append(path)
+
+    for line in (diff or "").splitlines():
+        if line.startswith("diff --git "):
+            m = re.match(r"^diff --git a/(.+) b/(.+)$", line)
+            if m:
+                _add(m.group(2))
+        elif line.startswith("+++ ") or line.startswith("--- "):
+            _add(_strip_diff_path(line[4:]))
+    return files
+
+
+def is_test_file(path):
+    """True if ``path`` looks like a test file by simple, common conventions.
+
+    Matches test directories (``tests/``, ``test/``, ``__tests__/``) and filename
+    patterns: ``test_*.py``, ``*_test.py``, and ``*.test.*`` / ``*.spec.*`` for
+    ts/tsx/js/jsx.
+    """
+    p = (path or "").strip().lower()
+    if not p:
+        return False
+    segments = p.split("/")
+    if any(seg in _TEST_DIR_SEGMENTS for seg in segments[:-1]):
+        return True
+    return bool(_TEST_FILENAME_RE.match(segments[-1]))
+
+
+def classify_changed_files(diff):
+    """Split the diff's changed files into ``(test_files, source_files)``."""
+    changed = parse_changed_files(diff)
+    test_files = [f for f in changed if is_test_file(f)]
+    source_files = [f for f in changed if not is_test_file(f)]
+    return test_files, source_files
+
+
+def detect_changed_symbols(diff, limit=40):
+    """Heuristically list functions/classes added or modified in the diff.
+
+    Scans ADDED lines (``+`` but not the ``+++`` header) for Python ``def``/``class``
+    and JS/TS ``function``/``const name =`` declarations. De-duplicated, capped at
+    ``limit``. Intentionally lightweight -- it is only context for the reviewer.
+    """
+    symbols = []
+    seen = set()
+    for line in (diff or "").splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:]
+        for pat in _SYMBOL_PATTERNS:
+            m = pat.match(content)
+            if m:
+                name = m.group(1)
+                if name not in seen:
+                    seen.add(name)
+                    symbols.append(name)
+                break
+        if len(symbols) >= limit:
+            break
+    return symbols
+
+
+def build_test_coverage_context(diff):
+    """Build the 'Test coverage context' section the model reads.
+
+    Lists production files changed, test files changed, flags when no test files
+    changed, surfaces heuristically-detected changed symbols, and reminds the
+    reviewer to suggest unit tests when risky logic changes without tests. Always
+    returns a non-empty markdown string so the prompt always carries this context.
+    """
+    test_files, source_files = classify_changed_files(diff)
+    symbols = detect_changed_symbols(diff)
+
+    lines = ["## Test coverage context", ""]
+
+    if source_files:
+        lines.append("Production/source files changed:")
+        lines += [f"- {f}" for f in source_files]
+    else:
+        lines.append("Production/source files changed: (none detected)")
+    lines.append("")
+
+    if test_files:
+        lines.append("Test files changed:")
+        lines += [f"- {f}" for f in test_files]
+    else:
+        lines.append("Test files changed: (none)")
+    lines.append("")
+
+    if symbols:
+        lines.append("Functions/classes added or modified (heuristic, may be incomplete):")
+        lines.append(", ".join(f"`{s}`" for s in symbols))
+        lines.append("")
+
+    if source_files and not test_files:
+        lines.append(
+            "> NOTE: this PR changes production code but no test files. Do NOT treat this "
+            "as an automatic blocker. If the changed logic is risky (auth, migrations, "
+            "campaign/email logic, Celery/background jobs, API contracts, or "
+            "data-destructive operations) or otherwise non-trivial, flag the missing "
+            "coverage and suggest concrete unit tests in `test_suggestions`."
+        )
+    else:
+        lines.append(
+            "> Reminder: when risky logic changes without matching test coverage, suggest "
+            "concrete unit tests in `test_suggestions`."
+        )
+    return "\n".join(lines)
+
+
 def truncate_diff(diff, max_chars):
     """Truncate ``diff`` to ``max_chars``.
 
@@ -210,7 +380,7 @@ def truncate_diff(diff, max_chars):
 
 
 def build_user_prompt(*, title, body, base_branch, diff, diff_truncated,
-                      ci_results=None, review_rules=None):
+                      ci_results=None, review_rules=None, test_coverage_context=None):
     """Assemble the user-turn prompt with all available context for the review."""
     parts = []
     parts.append(f"You are reviewing a pull request that targets the `{base_branch}` branch.")
@@ -230,6 +400,10 @@ def build_user_prompt(*, title, body, base_branch, diff, diff_truncated,
     if ci_results and ci_results.strip():
         parts.append("## CI / check results from this run")
         parts.append(ci_results.strip())
+        parts.append("")
+
+    if test_coverage_context and test_coverage_context.strip():
+        parts.append(test_coverage_context.strip())
         parts.append("")
 
     if diff_truncated:
@@ -575,6 +749,10 @@ def main():
             print("Diff is empty (nothing to review). Exiting 0.")
             return 0
 
+        # Detect changed/test files from the FULL diff before truncation, so the
+        # coverage context stays accurate even when the diff body gets cut.
+        test_coverage_context = build_test_coverage_context(diff)
+
         diff, truncated = truncate_diff(diff, max_diff_chars)
         if truncated:
             print(f"Diff truncated to {max_diff_chars} characters for the review.")
@@ -587,6 +765,7 @@ def main():
             diff_truncated=truncated,
             ci_results=read_optional_file(CI_RESULTS_FILE),
             review_rules=read_optional_file(REVIEW_RULES_FILE),
+            test_coverage_context=test_coverage_context,
         )
 
         review = call_model(

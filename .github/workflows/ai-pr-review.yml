@@ -37,18 +37,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Optional: capture lint/test output for the model to factor into the review.
-      # Anything written to ci_results.txt is folded into the review prompt.
-      # continue-on-error keeps a failing check from failing the whole job, and an
-      # empty file simply means "no CI context" (the script omits the section).
+      # Optional: run your existing CI / unit-test commands and capture their output
+      # for the model to factor into the review. Anything written to ci_results.txt
+      # is folded into the review prompt, so the reviewer can see whether tests
+      # actually pass (and suggest missing ones with that context in hand).
+      #
+      # By design this is framework-agnostic: nothing runs by default. Pick the
+      # lines that match your stack, uncomment them, and adapt the paths. Keep the
+      # `|| true` / `>>` so one failing check still records output instead of
+      # aborting; continue-on-error keeps a red check from failing the whole job,
+      # and an empty file simply means "no CI context" (the script omits the section).
       - name: Run checks (optional)
         continue-on-error: true
         run: |
           : > ci_results.txt
-          # --- Uncomment and adapt to your project: ---
-          # python -m pytest -q >> ci_results.txt 2>&1 || true
+          # --- Python (Django / pytest): ---
+          # python manage.py test >> ci_results.txt 2>&1 || true
+          # pytest -q >> ci_results.txt 2>&1 || true
           # ruff check . >> ci_results.txt 2>&1 || true
+          # --- Node / TypeScript: ---
           # npm test >> ci_results.txt 2>&1 || true
+          # npm run lint >> ci_results.txt 2>&1 || true
+          # npm run build >> ci_results.txt 2>&1 || true
 
       - name: AI review
         env:

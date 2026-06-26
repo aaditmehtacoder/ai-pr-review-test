@@ -143,6 +143,123 @@ def test_build_user_prompt_notes_truncation_only_when_truncated():
 
 
 # ---------------------------------------------------------------------------
+# Test-awareness: file parsing, test-file detection, symbol detection, and the
+# "Test coverage context" section the model reads. All offline, no network.
+# ---------------------------------------------------------------------------
+# A small but realistic two-file diff: one production file, one test file, plus a
+# delete and a couple of declarations to exercise the symbol heuristics.
+_SAMPLE_DIFF = """diff --git a/app/auth/login.py b/app/auth/login.py
+index 1111111..2222222 100644
+--- a/app/auth/login.py
++++ b/app/auth/login.py
+@@ -1,3 +1,8 @@
++def authenticate(user, password):
++    return check(user, password)
++
++class SessionManager:
++    pass
+diff --git a/tests/test_login.py b/tests/test_login.py
+index 0000000..3333333 100644
+--- /dev/null
++++ b/tests/test_login.py
+@@ -0,0 +1,3 @@
++def test_authenticate():
++    assert authenticate("a", "b")
+diff --git a/web/widget.ts b/web/widget.ts
+index 4444444..5555555 100644
+--- a/web/widget.ts
++++ b/web/widget.ts
+@@ -1,2 +1,4 @@
++export function renderWidget() {}
++const helper = () => 1;
+diff --git a/old/legacy.py b/old/legacy.py
+deleted file mode 100644
+index 6666666..0000000
+--- a/old/legacy.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-def gone():
+-    pass
+"""
+
+
+def test_parse_changed_files_extracts_paths_and_skips_dev_null():
+    files = air.parse_changed_files(_SAMPLE_DIFF)
+    assert "app/auth/login.py" in files
+    assert "tests/test_login.py" in files
+    assert "web/widget.ts" in files
+    assert "old/legacy.py" in files            # deleted file: new path comes from the git header
+    assert "/dev/null" not in files            # never the placeholder path
+    assert len(files) == len(set(files))       # de-duplicated
+
+
+def test_is_test_file_recognises_common_conventions():
+    assert air.is_test_file("tests/test_login.py")      # tests/ dir
+    assert air.is_test_file("pkg/__tests__/foo.js")     # __tests__/ dir
+    assert air.is_test_file("test_thing.py")            # test_*.py
+    assert air.is_test_file("thing_test.py")            # *_test.py
+    assert air.is_test_file("a/b/Button.test.tsx")      # *.test.tsx
+    assert air.is_test_file("a/b/Button.spec.ts")       # *.spec.ts
+    assert air.is_test_file("a/widget.test.js")         # *.test.js
+
+
+def test_is_test_file_rejects_plain_source_files():
+    assert not air.is_test_file("app/auth/login.py")
+    assert not air.is_test_file("web/widget.ts")
+    assert not air.is_test_file("README.md")
+    assert not air.is_test_file("")
+
+
+def test_classify_changed_files_splits_test_and_source():
+    test_files, source_files = air.classify_changed_files(_SAMPLE_DIFF)
+    assert "tests/test_login.py" in test_files
+    assert "app/auth/login.py" in source_files
+    assert "web/widget.ts" in source_files
+    assert "tests/test_login.py" not in source_files
+
+
+def test_detect_changed_symbols_finds_py_and_ts_declarations():
+    symbols = air.detect_changed_symbols(_SAMPLE_DIFF)
+    assert "authenticate" in symbols      # python def
+    assert "SessionManager" in symbols    # python class
+    assert "renderWidget" in symbols      # ts export function
+    assert "helper" in symbols            # ts const arrow
+
+
+def test_build_test_coverage_context_lists_files_and_reminds():
+    ctx = air.build_test_coverage_context(_SAMPLE_DIFF)
+    assert "Test coverage context" in ctx
+    assert "app/auth/login.py" in ctx        # production file listed
+    assert "tests/test_login.py" in ctx      # test file listed
+    assert "authenticate" in ctx             # changed symbol surfaced
+    assert "test_suggestions" in ctx         # reminder points at the schema field
+
+
+def test_build_test_coverage_context_flags_when_no_tests_changed():
+    src_only = (
+        "diff --git a/app/pay.py b/app/pay.py\n"
+        "--- a/app/pay.py\n+++ b/app/pay.py\n"
+        "@@ -1 +1,2 @@\n+def charge(card):\n+    pass\n"
+    )
+    ctx = air.build_test_coverage_context(src_only)
+    assert "Test files changed: (none)" in ctx
+    # The no-tests note must be explicit that this is NOT an automatic blocker.
+    assert "not" in ctx.lower() and "blocker" in ctx.lower()
+
+
+def test_build_user_prompt_includes_test_coverage_context():
+    ctx = air.build_test_coverage_context(_SAMPLE_DIFF)
+    prompt = air.build_user_prompt(
+        title="Add auth", body="", base_branch="main",
+        diff="--- a/app/auth/login.py\n+++ b/app/auth/login.py\n+def authenticate(): ...",
+        diff_truncated=False,
+        test_coverage_context=ctx,
+    )
+    assert "Test coverage context" in prompt   # the section is folded into the prompt
+    assert "tests/test_login.py" in prompt      # with its detected test file
+
+
+# ---------------------------------------------------------------------------
 # render_comment: clean PR vs. a PR with a blocker.
 # ---------------------------------------------------------------------------
 def _clean_review():

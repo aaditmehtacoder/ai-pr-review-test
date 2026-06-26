@@ -16,7 +16,10 @@ GitHub REST calls and the model inference.
 - ✅ Updates that one comment in place on every new push.
 - ✅ Posts a clear verdict and a status check — red ✗ when it says *do not merge*,
   green when it's mergeable (configurable; see [Blocking mode](#blocking-mode)).
+- ✅ Is **test-aware** — it sees which files are tests vs. source and can suggest
+  missing unit tests (see [Test awareness](#test-awareness)).
 - 🚫 **Never** merges, closes, approves, or pushes. It only comments and sets the check.
+- 🚫 **Never** writes, generates, or commits tests for you — it only *suggests* them.
 
 ---
 
@@ -30,6 +33,35 @@ GitHub REST calls and the model inference.
    carries a hidden marker (`<!-- ai-pr-review -->`); if a marked comment already
    exists it's `PATCH`ed, otherwise a new one is `POST`ed. That's why new pushes
    edit one comment instead of piling up.
+
+---
+
+## Test awareness
+
+The reviewer is a first-pass triage tool, and part of that is noticing when a
+change ships without test coverage. Before calling the model, the script parses
+the unified diff and builds a **"Test coverage context"** section that the model
+reads alongside the diff. With this, the bot can:
+
+- **Run your existing CI / unit-test commands** — uncomment the relevant lines in
+  the workflow's `Run checks` step (e.g. `python manage.py test`, `pytest`,
+  `npm test`, `npm run lint`, `npm run build`). Their output is captured to
+  `ci_results.txt` and folded into the prompt, so the model can see whether tests
+  actually pass. Nothing runs by default; the step is framework-agnostic.
+- **Inspect the diff for changed functions and files** — it classifies each
+  changed file as a *test* file (`tests/`, `__tests__/`, `test_*.py`, `*_test.py`,
+  `*.test.ts`, `*.spec.tsx`, `*.test.js`, …) or a *source* file, and uses
+  lightweight heuristics to list the functions/classes the PR adds or modifies.
+- **Suggest missing unit tests** — when risky logic changes without matching
+  tests, the model proposes concrete cases in the existing `test_suggestions`
+  field (shown in the comment's *Suggested tests* section). It treats missing
+  tests as **higher risk** when the PR touches auth, migrations, campaign/email
+  logic, Celery/background jobs, API contracts, or data-destructive operations.
+- It does **not** treat "no tests changed" as an automatic blocker — plenty of
+  safe changes (docs, config, simple refactors) need none.
+
+It **does not** write, generate, commit, or push tests. It only points out where
+tests are missing and what they should cover; a human writes them.
 
 ---
 
@@ -176,8 +208,10 @@ anything in either mode.
 
 The tests are fully offline — no network, no token. They cover the request
 builder, the response parser, prompt building, diff truncation, comment
-rendering, the exit-code policy, and the upsert's "post once, then edit in place"
-guarantee (via a stubbed HTTP layer).
+rendering, the exit-code policy, the test-awareness helpers (changed-file
+parsing, test-file detection, the test-coverage context, and that the prompt
+includes it), and the upsert's "post once, then edit in place" guarantee (via a
+stubbed HTTP layer).
 
 ```bash
 cd scripts && python -m pytest test_ai_pr_review.py -v
